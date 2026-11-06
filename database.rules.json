@@ -1,0 +1,10 @@
+{
+  "rules": {
+    "sbd": {
+      ".read": true,
+      ".write": true,
+      "orders": { ".indexOn": ["customerId", "createdAt"] },
+      "products": { ".indexOn": ["sellerId"] }
+    }
+  }
+}
