@@ -1,0 +1,90 @@
+<!DOCTYPE html><html lang="bn"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>SBD SHOP - Shop</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="sbd-core.js"></script>
+<script src="bd-locations.js"></script>
+<style>body{font-family:system-ui,sans-serif}</style></head><body class="bg-slate-50 text-slate-800"><div id="root"></div><script type="text/babel">
+const { useState, useEffect } = React;
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const cid = lsGet('sbd_cid', null) || (() => { const x = 'C' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); localStorage.setItem('sbd_cid', JSON.stringify(x)); return x; })();
+
+function Shop() {
+  const online = useConnected(), [toast, show] = useToast();
+  const prodRaw = useLive('products'), cats = useCategories().map(c => c.name);
+  const products = toList(prodRaw).filter(p => p.status !== 'hidden');
+  const [orders, setOrders] = useState([]);
+  const [page, setPage] = useState('HOME'), [q, setQ] = useState(''), [cat, setCat] = useState('ALL');
+  const [cart, setCart] = useState(lsGet('sbd_cart', {})); // {productId: qty} — দাম/stock সবসময় live
+  const [f, setF] = useState({ name: '', phone: '', division: '', district: '', upazila: '', address: '', paymentMethod: 'Cash on Delivery', trxId: '', ...lsGet('sbd_form', {}) });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { seedIfEmpty().catch(console.error); }, []);
+  useEffect(() => { localStorage.setItem('sbd_cart', JSON.stringify(cart)); }, [cart]);
+  useEffect(() => { // শুধু নিজের order, real-time
+    const r = R('orders').orderByChild('customerId').equalTo(cid);
+    const fn = r.on('value', s => setOrders(toList(s.val()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))));
+    return () => r.off('value', fn);
+  }, []);
+  const byId = Object.fromEntries(products.map(p => [p.id, p]));
+  const lines = Object.entries(cart).map(([id, qty]) => ({ p: byId[id], qty, id }));
+  const bad = lines.some(l => !l.p || l.p.stock < l.qty);
+  const sub = lines.reduce((s, l) => s + (l.p ? price(l.p) * l.qty : 0), 0);
+  const count = Object.values(cart).reduce((a, b) => a + b, 0);
+  const add = p => { if (p.stock < (cart[p.id] || 0) + 1) return show('Stock এর বেশি নেওয়া যাবে না', true); setCart({ ...cart, [p.id]: (cart[p.id] || 0) + 1 }); show('Cart এ যোগ হয়েছে'); };
+  const chg = (id, d) => { const n = (cart[id] || 0) + d; const c = { ...cart }; if (n < 1) delete c[id]; else c[id] = n; setCart(c); };
+  const place = async e => {
+    e.preventDefault();
+    if (!lines.length || bad) return show('Cart এ সমস্যা আছে', true);
+    if (f.paymentMethod !== 'Cash on Delivery' && !f.trxId) return show('Transaction ID দিন', true);
+    setBusy(true);
+    try {
+      await placeOrder({ ...f, customerId: cid, items: lines.map(l => ({ productId: l.id, qty: l.qty })) });
+      localStorage.setItem('sbd_form', JSON.stringify(f)); setCart({}); show('Order সফল হয়েছে!'); setPage('ACCOUNT');
+    } catch (err) { show(err.message, true); }
+    setBusy(false);
+  };
+  const shown = products.filter(p => p.name.toLowerCase().includes(q.toLowerCase()) && (cat === 'ALL' || p.category === cat));
+  const pm = ['Cash on Delivery', 'bKash', 'Nagad', 'SSLCommerz'];
+  return (<div className="min-h-screen">
+    {toast}
+    <nav className="bg-white border-b sticky top-0 z-30 shadow-sm"><div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div onClick={() => setPage('HOME')} className="cursor-pointer font-black text-xl">SBD <span className="text-orange-500">SHOP</span></div>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search..." className="flex-1 max-w-md p-2 text-xs bg-slate-100 rounded-xl hidden md:block" />
+      <div className="ml-auto flex items-center gap-3"><LiveBadge on={online} />
+        <button onClick={() => setPage('CART')} className="relative px-2">🛒{count > 0 && <b className="absolute -top-2 -right-1 bg-orange-500 text-white text-[10px] w-4 h-4 rounded-full text-center">{count}</b>}</button>
+        <button onClick={() => setPage('ACCOUNT')} className="bg-slate-100 px-3 py-1.5 rounded-xl text-xs font-semibold">My Orders</button></div></div></nav>
+    {page === 'HOME' && <main className="max-w-6xl mx-auto p-4 space-y-5">
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-orange-950 text-white p-8"><h2 className="text-2xl md:text-3xl font-extrabold">Shop Quality Products Nationwide</h2><p className="text-xs text-slate-300 mt-2">Cash on Delivery সারা বাংলাদেশে</p></div>
+      <div className="flex gap-2 overflow-x-auto">{['ALL', ...cats].map(c => <button key={c} onClick={() => setCat(c)} className={'px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap ' + (cat === c ? 'bg-orange-50 border-orange-500 text-orange-600' : 'bg-white')}>{c}</button>)}</div>
+      {prodRaw === undefined ? <p className="text-sm text-slate-400">Loading...</p> : <div className="grid grid-cols-2 md:grid-cols-4 gap-4">{shown.map(p => <div key={p.id} className={card + ' flex flex-col justify-between'}>
+        <div className="space-y-2"><img src={p.image} className="w-full h-36 object-cover rounded-xl bg-slate-100" /><span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">{p.category}</span><h3 className="font-bold text-xs line-clamp-2">{p.name}</h3></div>
+        <div className="mt-3 space-y-2"><div className="flex items-baseline gap-2"><b>{taka(price(p))}</b>{p.discountPrice && <s className="text-xs text-slate-400">{taka(p.price)}</s>}</div>
+          <button disabled={p.stock < 1} onClick={() => add(p)} className="w-full py-2 bg-slate-900 hover:bg-orange-500 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold">{p.stock < 1 ? 'Out of stock' : 'Add to Cart'}</button></div></div>)}</div>}
+    </main>}
+    {page === 'CART' && <main className="max-w-3xl mx-auto p-4 space-y-3"><h2 className="font-bold">Cart ({lines.length})</h2>
+      {!lines.length ? <div className={card + ' text-center'}>Cart খালি</div> : <>{lines.map(l => <div key={l.id} className={card + ' flex items-center gap-3 text-xs'}>
+        {l.p ? <><img src={l.p.image} className="w-12 h-12 rounded object-cover" /><div className="flex-1 min-w-0"><b className="block truncate">{l.p.name}</b>{taka(price(l.p))}{l.p.stock < l.qty && <span className="text-red-600 ml-2">Stock মাত্র {l.p.stock}</span>}</div></> : <div className="flex-1 text-red-600">Product আর পাওয়া যাচ্ছে না</div>}
+        <button onClick={() => chg(l.id, -1)} className="px-2 bg-slate-100 rounded">-</button><b>{l.qty}</b><button onClick={() => chg(l.id, 1)} className="px-2 bg-slate-100 rounded">+</button>
+        <button onClick={() => setCart(Object.fromEntries(Object.entries(cart).filter(([k]) => k !== l.id)))} className="text-red-500">🗑</button></div>)}
+        <div className={card + ' flex justify-between items-center'}><div><span className="text-xs text-slate-500 block">Total (delivery সহ)</span><b className="text-lg">{taka(sub + FEE)}</b></div><button disabled={bad} onClick={() => setPage('CHECKOUT')} className="px-6 py-2.5 bg-orange-500 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl">Checkout</button></div></>}</main>}
+    {page === 'CHECKOUT' && <main className="max-w-2xl mx-auto p-4"><form onSubmit={place} className={card + ' space-y-3 p-6'}><h2 className="font-bold">Checkout</h2>
+      <input required className={inp} placeholder="Full Name" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} />
+      <input required type="tel" className={inp} placeholder="Phone" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <select required className={inp} value={f.division} onChange={e => setF({ ...f, division: e.target.value, district: '', upazila: '' })}><option value="">বিভাগ (Division)</option>{Object.keys(BD).map(d => <option key={d}>{d}</option>)}</select>
+        <select required disabled={!f.division} className={inp} value={f.district} onChange={e => setF({ ...f, district: e.target.value, upazila: '' })}><option value="">জেলা (District)</option>{Object.keys(BD[f.division] || {}).map(d => <option key={d}>{d}</option>)}</select>
+        <select required disabled={!f.district} className={inp} value={f.upazila} onChange={e => setF({ ...f, upazila: e.target.value })}><option value="">উপজেলা (Upazila)</option>{((BD[f.division] || {})[f.district] || []).map(d => <option key={d}>{d}</option>)}</select></div>
+      <textarea required className={inp} placeholder="ঠিকানা (বাড়ি, রোড, এলাকা)" value={f.address} onChange={e => setF({ ...f, address: e.target.value })}></textarea>
+      <div className="grid grid-cols-2 gap-2">{pm.map(m => <button type="button" key={m} onClick={() => setF({ ...f, paymentMethod: m })} className={'p-3 text-xs font-bold rounded-xl border ' + (f.paymentMethod === m ? 'border-orange-500 bg-orange-50 text-orange-600' : 'bg-slate-50')}>{m}</button>)}</div>
+      {f.paymentMethod !== 'Cash on Delivery' && <input className={inp} placeholder="Transaction ID" value={f.trxId} onChange={e => setF({ ...f, trxId: e.target.value })} />}
+      <button disabled={busy} className="w-full py-3 bg-orange-500 disabled:bg-slate-300 text-white font-bold rounded-xl text-xs">{busy ? 'Placing...' : 'Confirm Order · ' + taka(sub + FEE)}</button></form></main>}
+    {page === 'ACCOUNT' && <main className="max-w-3xl mx-auto p-4 space-y-3"><h2 className="font-bold">My Orders ({orders.length}) <span className="text-[10px] text-slate-400">status live আপডেট হয়</span></h2>
+      {orders.map(o => <div key={o.id} className={card + ' text-xs space-y-1'}><div className="flex justify-between font-bold"><span>{o.id}</span><Badge s={o.orderStatus} /></div>
+        {toList(o.items).map((i, k) => <div key={k} className="text-slate-600">{i.name} × {i.quantity}</div>)}<div className="text-slate-500">{[o.address, o.upazila, o.district, o.division].filter(Boolean).join(', ')}</div><div>{o.paymentMethod} · <b>{taka(o.totalAmount)}</b></div></div>)}</main>}
+  </div>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Shop />);
+</script></body></html>
